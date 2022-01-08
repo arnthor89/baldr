@@ -3,6 +3,20 @@ from PIL import Image, ImageDraw
 from random import choices, shuffle
 import argparse
 from pathlib import Path
+from multiprocessing import Pool
+import time
+
+
+OUTPUT_PATH = ""
+
+
+def set_output_path(image_path):
+    """Sets the global output path"""
+    # Create a dictionary for the output
+    current_path = Path().resolve()
+    dir_path = get_unique_filename(Path(image_path).stem)
+    global OUTPUT_PATH
+    OUTPUT_PATH = os.path.join(current_path, dir_path)
 
 
 def chunk(seq, size, groupByList=True):
@@ -25,9 +39,9 @@ def get_palette_in_rgb(img):
     return colors
 
 
-def fill_in_missing_colors(num_squares_total, colors):
+def fill_in_missing_colors(num_colors, colors):
     """Returns a list of colors with length equal to num_squares_total"""
-    k = num_squares_total - len(colors)
+    k = num_colors - len(colors)
     if k < 0:
         return colors
     # Missing k colors, fill in by randomly sampling from the list
@@ -35,7 +49,7 @@ def fill_in_missing_colors(num_squares_total, colors):
     return colors + missing
 
 
-def get_colors_from_img(image, num_colors):
+def get_random_colors(image, num_squares_total, num_colors):
     """
     Returns a list of colors from the image
     with length equal to num_squares_total
@@ -46,21 +60,24 @@ def get_colors_from_img(image, num_colors):
     # Get all the distinct colors
     distinct_colors = list(set(colors))
 
+    # In case we have too few colors
     distinct_colors = fill_in_missing_colors(
         num_colors, distinct_colors
     )
 
     # Get the first n random colors
     shuffle(distinct_colors)
-    return distinct_colors[:num_colors]
+    return fill_in_missing_colors(num_squares_total, distinct_colors[:num_colors])
 
 
 def draw_squares(width, height, square_size, colors):
     """Draws a sequence of squares on an image using a list of colors"""
-    x1, y1 = 0
-    x2, y2 = square_size
-    im = Image.new("RGB", (width, height))
-    draw = ImageDraw.Draw(im)
+    x1 = 0
+    y1 = 0
+    x2 = square_size
+    y2 = square_size
+    image = Image.new("RGB", (width, height))
+    draw = ImageDraw.Draw(image)
 
     for color in colors:
         draw.rectangle([(x1, y1), (x2, y2)], fill=color)
@@ -72,7 +89,7 @@ def draw_squares(width, height, square_size, colors):
         else:
             x1 += square_size
             x2 += square_size
-    return im
+    return image
 
 
 def get_unique_filename(path):
@@ -85,14 +102,26 @@ def get_unique_filename(path):
     return path
 
 
+def save_image(pic_tuple):
+    """Saves a single image"""
+    global OUTPUT_PATH
+    index, pic = pic_tuple
+    filename = f"pic{index}.png"
+    pic.save(os.path.join(OUTPUT_PATH, filename), format="PNG")
+    return True
+
+
 def run(
     image_path: str,
     width: int,
     height: int,
     square_size: int,
+    num_colors: int,
+    num_pictures: int,
     save: bool,
     open: bool,
 ) -> None:
+    start = time.time()
     # Size for the new picture
     num_squares_x = width
     num_squares_y = height
@@ -110,18 +139,39 @@ def run(
     # Convert the image to pallet mode
     pallet_image = original_image.convert(mode="P")
 
-    # Get the colors as a list of tuples
-    colors = get_colors_from_img(pallet_image, num_colors=num_squares_total)
-
-    # Draw the new image using the pallet
-    square_image = draw_squares(width, height, square_size, colors)
-
-    if open:
-        square_image.show()
     if save:
-        original_filaname = Path(image_path).stem
-        filename = get_unique_filename(f"{original_filaname}-colors.png")
-        square_image.save(filename, format="PNG")
+        set_output_path(image_path)
+        os.mkdir(OUTPUT_PATH)
+
+    pictures = list()
+    for _ in range(num_pictures):
+        # Get random colors as a list of tuples
+        colors = get_random_colors(pallet_image, num_squares_total, num_colors)
+        # Draw the new image using the pallet
+        square_image = draw_squares(width, height, square_size, colors)
+        pictures.append(square_image)
+
+    # if open:
+    #     for p in pictures:
+    #         p.show()
+
+    if save:
+        pool = Pool()
+        pool.imap(save_image, enumerate(pictures))
+        pool.close()
+        pool.join()
+        print(f"Generated {num_pictures} pictures in {OUTPUT_PATH} 🍺")
+
+    # pool = Pool()
+    # pool.imap(save_image, range(num_pictures))
+    # pool.close()
+    # pool.join()
+    # print(f"Generated {num_pictures} pictures in {OUTPUT_PATH} 🍺")
+
+
+    end = time.time()
+    print(f"Elapsed: {end - start}")
+
 
 
 if __name__ == "__main__":
@@ -160,9 +210,26 @@ if __name__ == "__main__":
         type=int,
     )
     parser.add_argument(
+        "--num-colors",
+        help="Number of colors to use",
+        choices=range(1, 101),
+        metavar="[1-100]",
+        default=10,
+        type=int,
+    )
+    parser.add_argument(
+        "--num-pictures",
+        help="Number of pictures to generate",
+        choices=range(1, 101),
+        metavar="[1-100]",
+        default=5,
+        type=int,
+    )
+    parser.add_argument(
         "-s",
         "--save",
         help="Save the image to the current path as a png file",
+        default=True
     )
     parser.add_argument(
         "-o", "--open", help="Open the image", action="store_true"
@@ -174,6 +241,8 @@ if __name__ == "__main__":
         width=args.width,
         height=args.height,
         square_size=args.square_size,
+        num_colors=args.num_colors,
+        num_pictures=args.num_pictures,
         save=args.save,
         open=args.open,
     )
