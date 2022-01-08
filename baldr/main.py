@@ -1,22 +1,56 @@
-import os
-from PIL import Image, ImageDraw
-from random import choices, shuffle
 import argparse
-from pathlib import Path
+import os
 from multiprocessing import Pool
-import time
+from pathlib import Path
+from random import choices, shuffle
+
+import tqdm
+from PIL import Image, ImageDraw
+
+OPTIONS = None
 
 
-OUTPUT_PATH = ""
+class Options:
+    def __init__(
+        self,
+        image_path: str,
+        pallet_image: Image,
+        width: int,
+        height: int,
+        square_size: int,
+        num_colors: int,
+        num_pictures: int,
+        test: bool,
+    ) -> None:
+        self.image_path = image_path
+        self.pallet_image = pallet_image
+        # Size for the new picture
+        self.num_squares_x = width
+        self.num_squares_y = height
+        self.num_squares_total = self.num_squares_x * self.num_squares_y
+        self.width = self.num_squares_x * square_size
+        self.height = self.num_squares_y * square_size
+        self.square_size = square_size
+        self.num_colors = num_colors
+        self.num_pictures = num_pictures
+        self.output_path = self.get_output_path()
+        self.test = test
 
+    def get_output_path(self):
+        """Sets the global output path"""
+        # Create a dictionary for the output
+        current_path = Path().resolve()
+        dir_path = self.get_unique_filename(Path(self.image_path).stem)
+        return os.path.join(current_path, dir_path)
 
-def set_output_path(image_path):
-    """Sets the global output path"""
-    # Create a dictionary for the output
-    current_path = Path().resolve()
-    dir_path = get_unique_filename(Path(image_path).stem)
-    global OUTPUT_PATH
-    OUTPUT_PATH = os.path.join(current_path, dir_path)
+    def get_unique_filename(self, path):
+        """Adds a suffix to filename if it already exists"""
+        filename, extension = os.path.splitext(path)
+        suffix = 1
+        while os.path.exists(path):
+            path = f"{filename}({str(suffix)}){extension}"
+            suffix += 1
+        return path
 
 
 def chunk(seq, size, groupByList=True):
@@ -24,7 +58,7 @@ def chunk(seq, size, groupByList=True):
     func = tuple
     if groupByList:
         func = list
-    return [func(seq[i: i + size]) for i in range(0, len(seq), size)]
+    return [func(seq[i : i + size]) for i in range(0, len(seq), size)]
 
 
 def get_palette_in_rgb(img):
@@ -61,9 +95,7 @@ def get_random_colors(image, num_squares_total, num_colors):
     distinct_colors = list(set(colors))
 
     # In case we have too few colors
-    distinct_colors = fill_in_missing_colors(
-        num_colors, distinct_colors
-    )
+    distinct_colors = fill_in_missing_colors(num_colors, distinct_colors)
 
     # Get the first n random colors
     shuffle(distinct_colors)
@@ -102,12 +134,17 @@ def get_unique_filename(path):
     return path
 
 
-def save_image(pic_tuple):
-    """Saves a single image"""
-    global OUTPUT_PATH
-    index, pic = pic_tuple
-    filename = f"pic{index}.png"
-    pic.save(os.path.join(OUTPUT_PATH, filename), format="PNG")
+def generate_image(index):
+    global OPTIONS
+    # Get random colors as a list of tuples
+    colors = get_random_colors(OPTIONS.pallet_image, OPTIONS.num_squares_total, OPTIONS.num_colors)
+    # Draw the new image using the pallet
+    image = draw_squares(OPTIONS.width, OPTIONS.height, OPTIONS.square_size, colors)
+    file_path = os.path.join(OPTIONS.output_path, f"pic{index}.png")
+    if OPTIONS.test:
+        image.show()
+    else:
+        image.save(file_path, format="PNG")
     return True
 
 
@@ -118,16 +155,11 @@ def run(
     square_size: int,
     num_colors: int,
     num_pictures: int,
-    save: bool,
-    open: bool,
+    test: bool,
 ) -> None:
-    start = time.time()
-    # Size for the new picture
-    num_squares_x = width
-    num_squares_y = height
-    num_squares_total = num_squares_x * num_squares_y
-    width = num_squares_x * square_size
-    height = num_squares_y * square_size
+
+    # import time
+    # start = time.time()
 
     # Get the original image
     try:
@@ -139,45 +171,44 @@ def run(
     # Convert the image to pallet mode
     pallet_image = original_image.convert(mode="P")
 
-    if save:
-        set_output_path(image_path)
-        os.mkdir(OUTPUT_PATH)
+    global OPTIONS
+    OPTIONS = Options(
+        image_path,
+        pallet_image,
+        width,
+        height,
+        square_size,
+        num_colors,
+        num_pictures,
+        test,
+    )
 
-    pictures = list()
-    for _ in range(num_pictures):
-        # Get random colors as a list of tuples
-        colors = get_random_colors(pallet_image, num_squares_total, num_colors)
-        # Draw the new image using the pallet
-        square_image = draw_squares(width, height, square_size, colors)
-        pictures.append(square_image)
+    if test:
+        print("Generating a single picture")
+        generate_image(0)
+        return
 
-    # if open:
-    #     for p in pictures:
-    #         p.show()
+    # Create a new directory for the output
+    os.mkdir(OPTIONS.output_path)
 
-    if save:
-        pool = Pool()
-        pool.imap(save_image, enumerate(pictures))
-        pool.close()
-        pool.join()
-        print(f"Generated {num_pictures} pictures in {OUTPUT_PATH} 🍺")
+    print("\nBeep boop bop 🤖")
+    print("Generated pictures\n")
 
-    # pool = Pool()
-    # pool.imap(save_image, range(num_pictures))
-    # pool.close()
-    # pool.join()
-    # print(f"Generated {num_pictures} pictures in {OUTPUT_PATH} 🍺")
+    pool = Pool()
+    tasks = range(num_pictures)
+    for _ in tqdm.tqdm(pool.imap_unordered(generate_image, tasks), total=len(tasks)):
+        pass
+    pool.close()
+    pool.join()
 
+    print(f"\nGenerated {num_pictures} pictures in {OPTIONS.output_path} 🍺")
 
-    end = time.time()
-    print(f"Elapsed: {end - start}")
-
+    # end = time.time()
+    # print(f"Elapsed: {end - start}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "-i",
         "--image-path",
@@ -203,9 +234,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--square-size",
-        help="Size of each square",
-        choices=range(1, 257),
-        metavar="[1-256]",
+        help="Pixels in each square",
+        choices=range(1, 513),
+        metavar="[1-512]",
         default=128,
         type=int,
     )
@@ -225,15 +256,7 @@ if __name__ == "__main__":
         default=5,
         type=int,
     )
-    parser.add_argument(
-        "-s",
-        "--save",
-        help="Save the image to the current path as a png file",
-        default=True
-    )
-    parser.add_argument(
-        "-o", "--open", help="Open the image", action="store_true"
-    )
+    parser.add_argument("-t", "--test", help="Will generate and open a single picture", action="store_true")
     args = parser.parse_args()
 
     run(
@@ -243,6 +266,5 @@ if __name__ == "__main__":
         square_size=args.square_size,
         num_colors=args.num_colors,
         num_pictures=args.num_pictures,
-        save=args.save,
-        open=args.open,
+        test=args.test,
     )
